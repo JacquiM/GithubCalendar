@@ -1,0 +1,20 @@
+{
+  "name": "githubcalendar",
+  "version": "1.0.0",
+  "description": "This is a static, mobile-friendly single-page web app that displays a calendar and fetches Microsoft Outlook meetings via a Power Automate flow. The app is built with Vite (vanilla JS template) and is suitable for deployment to GitHub Pages.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d dist"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "vite": "^6.3.5",
+    "gh-pages": "^6.0.0"
+  }
+}
