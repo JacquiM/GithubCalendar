@@ -117,7 +117,6 @@ function renderMeetings(meetings, weekStart) {
   // Group meetings by day
   const meetingsByDay = Array.from({ length: 7 }, () => []);
   meetings.forEach(meeting => {
-    // Use startWithTimeZone and endWithTimeZone if present, else fallback
     const startStr = meeting.startWithTimeZone || meeting.start?.dateTime || meeting.start;
     const endStr = meeting.endWithTimeZone || meeting.end?.dateTime || meeting.end;
     const start = new Date(startStr);
@@ -127,7 +126,6 @@ function renderMeetings(meetings, weekStart) {
   });
   // Calculate max overlaps per day
   const maxOverlaps = meetingsByDay.map(dayMeetings => {
-    // Build an array of all time slots (26 slots: 7:00-20:00, 30min each)
     const slots = Array(26).fill(0);
     dayMeetings.forEach(({ start, end }) => {
       let startSlot = (start.getHours() - 7) * 2 + (start.getMinutes() >= 30 ? 1 : 0);
@@ -154,32 +152,98 @@ function renderMeetings(meetings, weekStart) {
       }
     }
   }
-  // Place meetings in correct slots, side by side
+  // For each day, group overlapping meetings into clusters and render them together
   meetingsByDay.forEach((dayMeetings, dayIdx) => {
     // Sort by start time
     dayMeetings.sort((a, b) => a.start - b.start);
-    // For each meeting, find its slot and add to the flex row
+    // Build clusters of overlapping meetings
+    let clusters = [];
+    let currentCluster = [];
+    let clusterEnd = null;
     dayMeetings.forEach(({ meeting, start, end }) => {
       let startSlot = (start.getHours() - 7) * 2 + (start.getMinutes() >= 30 ? 1 : 0);
       let endSlot = (end.getHours() - 7) * 2 + (end.getMinutes() > 0 ? (end.getMinutes() > 30 ? 2 : 1) : 0);
       if (end.getMinutes() === 0 && end.getSeconds() === 0) endSlot = (end.getHours() - 7) * 2;
       if (end.getMinutes() === 30 && end.getSeconds() === 0) endSlot = (end.getHours() - 7) * 2 + 1;
       if (endSlot <= startSlot) endSlot = startSlot + 1;
-      // Hide covered cells (for rowspan effect)
-      for (let slot = startSlot + 1; slot < endSlot; slot++) {
+      if (!clusterEnd || startSlot < clusterEnd) {
+        currentCluster.push({ meeting, start, end, startSlot, endSlot });
+        clusterEnd = Math.max(clusterEnd || 0, endSlot);
+      } else {
+        clusters.push(currentCluster);
+        currentCluster = [{ meeting, start, end, startSlot, endSlot }];
+        clusterEnd = endSlot;
+      }
+    });
+    if (currentCluster.length) clusters.push(currentCluster);
+    // Render each cluster
+    clusters.forEach(cluster => {
+      const minSlot = Math.min(...cluster.map(m => m.startSlot));
+      const maxSlot = Math.max(...cluster.map(m => m.endSlot));
+      // Hide covered cells
+      for (let slot = minSlot + 1; slot < maxSlot; slot++) {
         const coveredCell = document.querySelector(`#calendar-table td[data-day="${dayIdx}"][data-slot="${slot}"]`);
         if (coveredCell) coveredCell.style.display = 'none';
       }
-      // Place block in the flex row of the top cell
-      const cell = document.querySelector(`#calendar-table td[data-day="${dayIdx}"][data-slot="${startSlot}"]`);
+      // Assign columns to meetings in the cluster
+      let columns = [];
+      let meetingColumns = new Map();
+      cluster.forEach((m, i) => {
+        let col = 0;
+        while (columns[col] && columns[col] > m.startSlot) col++;
+        columns[col] = m.endSlot;
+        meetingColumns.set(i, col);
+      });
+      const numCols = Math.max(1, ...Array.from(meetingColumns.values()).map(c => c + 1));
+      // Render all meetings in the cluster in the top cell
+      const cell = document.querySelector(`#calendar-table td[data-day="${dayIdx}"][data-slot="${minSlot}"]`);
       if (cell) {
-        cell.rowSpan = endSlot - startSlot;
-        const color = colors[meeting.calendarIndex % colors.length];
-        const border = borders[meeting.calendarIndex % borders.length];
+        cell.rowSpan = maxSlot - minSlot;
+        cell.style.position = 'relative';
+        cell.style.padding = '0';
+        cell.innerHTML = `<div class=\"meeting-row\" style=\"display:flex;position:relative;height:100%;width:100%;overflow-x:auto;\"></div>`;
         const rowDiv = cell.querySelector('.meeting-row');
-        if (rowDiv) {
-          rowDiv.innerHTML += `<div class="meeting" style="background:${color};border-left:4px solid ${border};height:100%;min-width:100px;flex:1 1 0;max-width:${100 / maxOverlaps[dayIdx]}%;margin:1px;box-sizing:border-box;overflow:auto;padding:2px 4px;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;z-index:1;"><strong>${meeting.subject}</strong><br>${start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>`;
-        }
+        // Wait for the cell to be rendered so we can get its pixel height
+        setTimeout(() => {
+          if (rowDiv && cell.offsetHeight > 0) {
+            const dayStartMinutes = 7 * 60;
+            const dayEndMinutes = 20 * 60;
+            const totalDayMinutes = dayEndMinutes - dayStartMinutes;
+            const clusterStartMinutes = minSlot * 30 + dayStartMinutes;
+            const clusterEndMinutes = maxSlot * 30 + dayStartMinutes;
+            const clusterTotalMinutes = clusterEndMinutes - clusterStartMinutes;
+            const cellHeight = cell.offsetHeight;
+            cluster.forEach((m, i) => {
+              const color = colors[m.meeting.calendarIndex % colors.length];
+              const border = borders[m.meeting.calendarIndex % borders.length];
+              const colIdx = meetingColumns.get(i);
+              // Calculate vertical position and height for each meeting using actual time
+              const startMinutes = m.start.getHours() * 60 + m.start.getMinutes();
+              const endMinutes = m.end.getHours() * 60 + m.end.getMinutes();
+              const topPx = ((startMinutes - clusterStartMinutes) / clusterTotalMinutes) * cellHeight;
+              const heightPx = ((endMinutes - startMinutes) / clusterTotalMinutes) * cellHeight;
+              const meetingDiv = document.createElement('div');
+              meetingDiv.className = 'meeting';
+              meetingDiv.style.background = color;
+              meetingDiv.style.borderLeft = `4px solid ${border}`;
+              meetingDiv.style.position = 'absolute';
+              meetingDiv.style.left = `${(colIdx * 100) / numCols}%`;
+              meetingDiv.style.width = `${100 / numCols}%`;
+              meetingDiv.style.top = `${topPx}px`;
+              meetingDiv.style.height = `${heightPx}px`;
+              meetingDiv.style.boxSizing = 'border-box';
+              meetingDiv.style.overflow = 'auto';
+              meetingDiv.style.padding = '2px 4px';
+              meetingDiv.style.display = 'flex';
+              meetingDiv.style.flexDirection = 'column';
+              meetingDiv.style.justifyContent = 'center';
+              meetingDiv.style.alignItems = 'flex-start';
+              meetingDiv.style.zIndex = '1';
+              meetingDiv.innerHTML = `<strong>${m.meeting.subject}</strong><br>${m.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - ${m.end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+              rowDiv.appendChild(meetingDiv);
+            });
+          }
+        }, 0);
       }
     });
   });
